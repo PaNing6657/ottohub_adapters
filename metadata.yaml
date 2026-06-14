@@ -1,0 +1,6 @@
+name: ottohub
+display_name: OTTOhub 平台适配器
+desc: OTTOhub 平台适配器，用于私信和评论回复。
+author: STCaoMei
+version: 4.1.2
+repo: https://github.com/PaNing6657/ottohub_adapters
