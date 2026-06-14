@@ -1,4 +1,4 @@
-name: ottohub
+name: astrbot_plugin_ottohub
 display_name: OTTOhub 平台适配器
 desc: OTTOhub 平台适配器，用于私信和评论回复。
 author: STCaoMei
