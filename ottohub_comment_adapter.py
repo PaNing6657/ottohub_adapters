@@ -433,7 +433,7 @@ class OTTOhubCommentPlatformAdapter(Platform):
             msg_id,
             "blog",
             bid,
-            str(parent_bcid),
+            str(target_bcid),
             comment_author,
             uid,
             comment_text,

@@ -80,7 +80,8 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
             await super().send(message)
             return
 
-        if comment_author:
+        is_sub = raw_info.get("is_sub", False)
+        if comment_author and not is_sub:
             reply_text = f"@{comment_author} {reply_text}"
 
         await self._reply_with_retry(cmt_type, object_id, parent_cid, reply_text)
