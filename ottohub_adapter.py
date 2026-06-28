@@ -78,17 +78,31 @@ class OTTOhubPlatformAdapter(Platform):
         receiver = session.session_id
         for segment in message_chain.chain:
             if isinstance(segment, Plain):
-                logger.info(f"[OTTOhub] send_by_session sending text: {segment.text[:50]}...")
-                try:
-                    result = await self.client.send_message(
-                        receiver=receiver,
-                        message=segment.text,
+                text = segment.text
+                chunks = [text[i : i + 200] for i in range(0, len(text), 200)]
+                logger.info(
+                    f"[OTTOhub] Split {len(text)} chars into {len(chunks)} chunk(s)"
+                )
+                for idx, chunk in enumerate(chunks):
+                    logger.info(
+                        f"[OTTOhub] send_by_session chunk {idx+1}/{len(chunks)}: "
+                        f"{chunk[:50]}..."
                     )
-                    logger.info(f"[OTTOhub] send_by_session result: {result}")
-                except Exception as e:
-                    logger.error(f"[OTTOhub] send_by_session failed: {e}")
+                    try:
+                        result = await self.client.send_message(
+                            receiver=receiver,
+                            message=chunk,
+                        )
+                        logger.info(f"[OTTOhub] send_by_session result: {result}")
+                    except Exception as e:
+                        logger.error(f"[OTTOhub] send_by_session failed: {e}")
+                    if idx < len(chunks) - 1:
+                        await asyncio.sleep(3)
             else:
-                logger.info(f"[OTTOhub] send_by_session skipping non-Plain segment: {type(segment).__name__}")
+                logger.info(
+                    f"[OTTOhub] send_by_session skipping non-Plain segment: "
+                    f"{type(segment).__name__}"
+                )
 
         await super().send_by_session(session, message_chain)
 

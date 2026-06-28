@@ -61,8 +61,9 @@ class OTTOhubPlatformEvent(AstrMessageEvent):
             if isinstance(segment, Plain):
                 text = segment.text
                 chunks = [text[i : i + 200] for i in range(0, len(text), 200)]
+                logger.info(f"[OTTOhub] Split {len(text)} chars into {len(chunks)} chunk(s)")
                 for idx, chunk in enumerate(chunks):
-                    logger.info(f"[OTTOhub] Sending text: {chunk[:50]}...")
+                    logger.info(f"[OTTOhub] Sending chunk {idx+1}/{len(chunks)}: {chunk[:50]}...")
                     await self.platform.client.send_message(
                         receiver=sender_id,
                         message=chunk,

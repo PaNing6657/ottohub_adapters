@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from astrbot import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.message_components import Image, Plain
 
@@ -26,6 +27,7 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
         self, cmt_type: str, object_id: str, parent_cid: str, text: str
     ) -> None:
         chunks = [text[i : i + 400] for i in range(0, len(text), 400)]
+        logger.info(f"[OTTOhub Cmt] Split {len(text)} chars into {len(chunks)} chunk(s)")
         for idx, chunk in enumerate(chunks):
             for attempt in range(2):
                 try:
@@ -37,6 +39,7 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
                         await self.platform.client.reply_video_comment(
                             object_id, parent_cid, chunk
                         )
+                    logger.info(f"[OTTOhub Cmt] Chunk {idx+1}/{len(chunks)} sent")
                     break
                 except RuntimeError as e:
                     if "too_many_requests" in str(e) and attempt < 1:
@@ -47,6 +50,10 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
                 await asyncio.sleep(10)
 
     async def send(self, message: MessageChain) -> None:
+        logger.info(
+            f"[OTTOhub Cmt] event.send() ENTRY, session={self.session_id}, "
+            f"chain_len={len(message.chain)}"
+        )
         if not message.chain:
             return
 
@@ -81,9 +88,10 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
             return
 
         is_sub = raw_info.get("is_sub", False)
-        if comment_author and not is_sub:
+        if comment_author:
             reply_text = f"@{comment_author} {reply_text}"
 
+        logger.info(f"[OTTOhub Cmt] Replying to {cmt_type}:{object_id}, text_len={len(reply_text)}")
         await self._reply_with_retry(cmt_type, object_id, parent_cid, reply_text)
 
         await super().send(message)

@@ -63,6 +63,7 @@ class OTTOhubCommentPlatformAdapter(Platform):
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._processed_file = self._data_dir / "processed_ids.json"
         self._load_processed_ids()
+        self._session_meta: dict[str, dict[str, Any]] = {}
 
     def _load_processed_ids(self) -> None:
         if self._processed_file.exists():
@@ -91,6 +92,61 @@ class OTTOhubCommentPlatformAdapter(Platform):
     async def send_by_session(
         self, session: MessageSesion, message_chain: MessageChain
     ) -> None:
+        logger.info(
+            f"[OTTOhub Cmt] send_by_session ENTRY, session={session.session_id}, "
+            f"chain_len={len(message_chain.chain)}"
+        )
+        if not self.client:
+            await super().send_by_session(session, message_chain)
+            return
+
+        parts = session.session_id.split(":")
+        if len(parts) < 4 or parts[0] != "ottohub_cmt":
+            await super().send_by_session(session, message_chain)
+            return
+
+        cmt_type = parts[1]
+        object_id = parts[2]
+        parent_cid = parts[3]
+
+        reply_parts = []
+        for segment in message_chain.chain:
+            if isinstance(segment, Plain):
+                reply_parts.append(segment.text)
+
+        reply_text = "".join(reply_parts).strip()
+        if not reply_text:
+            await super().send_by_session(session, message_chain)
+            return
+
+        meta = getattr(self, "_session_meta", {}).pop(session.session_id, {})
+        comment_author = meta.get("comment_author", "")
+        if comment_author:
+            reply_text = f"@{comment_author} {reply_text}"
+
+        chunks = [reply_text[i : i + 400] for i in range(0, len(reply_text), 400)]
+        logger.info(
+            f"[OTTOhub Cmt] Split {len(reply_text)} chars into {len(chunks)} chunk(s)"
+        )
+        for idx, chunk in enumerate(chunks):
+            for attempt in range(2):
+                try:
+                    if cmt_type == "blog":
+                        await self.client.reply_comment(object_id, parent_cid, chunk)
+                    elif cmt_type == "video":
+                        await self.client.reply_video_comment(
+                            object_id, parent_cid, chunk
+                        )
+                    logger.info(f"[OTTOhub Cmt] Chunk {idx+1}/{len(chunks)} sent")
+                    break
+                except RuntimeError as e:
+                    if "too_many_requests" in str(e) and attempt < 1:
+                        await asyncio.sleep(10)
+                    else:
+                        raise
+            if idx < len(chunks) - 1:
+                await asyncio.sleep(10)
+
         await super().send_by_session(session, message_chain)
 
     @override
@@ -433,11 +489,11 @@ class OTTOhubCommentPlatformAdapter(Platform):
             msg_id,
             "blog",
             bid,
-            str(target_bcid),
+            parent_bcid,
             comment_author,
             uid,
             comment_text,
-            {"type": "blog", "bid": bid, "parent_bcid": target_bcid, "is_sub": True},
+            {"type": "blog", "bid": bid, "parent_bcid": parent_bcid, "is_sub": True},
             images,
         )
 
@@ -462,15 +518,20 @@ class OTTOhubCommentPlatformAdapter(Platform):
         abm.message_str = message_str
         abm.sender = MessageMember(user_id=sender_uid, nickname=comment_author)
 
-        message_chain = [Plain(text=message_str)]
+        message_chain_items = [Plain(text=message_str)]
         if image_urls:
             for url in image_urls:
-                message_chain.append(Image(file=url))
-        abm.message = message_chain
+                message_chain_items.append(Image(file=url))
+        abm.message = message_chain_items
         abm.raw_message = raw_info
         abm.self_id = cast(str, self.bot_self_id)
         abm.session_id = session_id
         abm.message_id = msg_id
+
+        self._session_meta[session_id] = {
+            "comment_author": comment_author,
+            "is_sub": raw_info.get("is_sub", False),
+        }
 
         event = OTTOhubCommentPlatformEvent(
             message_str=abm.message_str,
