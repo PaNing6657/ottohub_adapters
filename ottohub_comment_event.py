@@ -25,12 +25,11 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
 
     async def _reply_with_retry(
         self, cmt_type: str, object_id: str, parent_cid: str, text: str,
-        fallback_parent_cid: str | None = None,
     ) -> None:
         chunks = [text[i : i + 400] for i in range(0, len(text), 400)]
         logger.info(f"[OTTOhub Cmt] Split {len(text)} chars into {len(chunks)} chunk(s)")
         for idx, chunk in enumerate(chunks):
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
                     if cmt_type == "blog":
                         await self.platform.client.reply_comment(
@@ -44,19 +43,16 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
                     break
                 except RuntimeError as e:
                     err_msg = str(e)
-                    if "too_many_requests" in err_msg and attempt < 1:
-                        await asyncio.sleep(10)
-                    elif "error_parent" in err_msg and fallback_parent_cid and fallback_parent_cid != parent_cid:
+                    if "too_many_requests" in err_msg and attempt < 2:
+                        wait = 15 * (attempt + 1)
                         logger.warning(
-                            f"[OTTOhub Cmt] error_parent with parent_cid={parent_cid}, "
-                            f"retrying with fallback={fallback_parent_cid}"
+                            f"[OTTOhub Cmt] Rate limited, waiting {wait}s before retry"
                         )
-                        parent_cid = fallback_parent_cid
-                        fallback_parent_cid = None
+                        await asyncio.sleep(wait)
                     else:
                         raise
             if idx < len(chunks) - 1:
-                await asyncio.sleep(10)
+                await asyncio.sleep(15)
 
     async def send(self, message: MessageChain) -> None:
         logger.info(
@@ -79,13 +75,11 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
         if hasattr(self, "message_obj") and self.message_obj:
             raw_info = getattr(self.message_obj, "raw_message", {}) or {}
         comment_author = raw_info.get("comment_author", "")
-        is_sub = raw_info.get("is_sub", False)
-        main_bcid = raw_info.get("main_bcid", "")
 
         logger.info(
             f"[OTTOhub Cmt] send: session={self.session_id}, "
-            f"is_sub={is_sub}, bid/object_id={object_id}, parent_cid={parent_cid}, "
-            f"main_bcid={main_bcid}, author={comment_author}"
+            f"bid/object_id={object_id}, parent_cid={parent_cid}, "
+            f"author={comment_author}"
         )
 
         reply_parts = []
@@ -108,7 +102,6 @@ class OTTOhubCommentPlatformEvent(AstrMessageEvent):
             reply_text = f"@{comment_author} {reply_text}"
 
         logger.info(f"[OTTOhub Cmt] Replying to {cmt_type}:{object_id}, text_len={len(reply_text)}")
-        fallback = main_bcid if is_sub and main_bcid and main_bcid != parent_cid else None
-        await self._reply_with_retry(cmt_type, object_id, parent_cid, reply_text, fallback)
+        await self._reply_with_retry(cmt_type, object_id, parent_cid, reply_text)
 
         await super().send(message)

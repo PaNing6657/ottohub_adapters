@@ -490,13 +490,14 @@ class OTTOhubCommentPlatformAdapter(Platform):
 
         if not target_bcid:
             logger.warning(
-                f"[OTTOhub Cmt] target_bcid is 0/empty, using parent_bcid={parent_bcid}"
+                f"[OTTOhub Cmt] target_bcid is 0/empty"
             )
-            reply_bcid = parent_bcid
-            is_sub = False
-        else:
-            reply_bcid = str(target_bcid)
-            is_sub = True
+
+        logger.info(
+            f"[OTTOhub Cmt] Using main comment BCID={parent_bcid} for reply "
+            f"(sub-comment BCID={target_bcid})"
+        )
+        reply_bcid = parent_bcid
 
         all_contents = [blog_content, comment_text]
         images = self._collect_images(all_contents)
@@ -513,8 +514,7 @@ class OTTOhubCommentPlatformAdapter(Platform):
                 "type": "blog",
                 "bid": bid,
                 "parent_bcid": reply_bcid,
-                "main_bcid": parent_bcid,
-                "is_sub": is_sub,
+                "is_sub": True,
             },
             images,
         )
