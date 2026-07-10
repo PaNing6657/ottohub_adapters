@@ -217,6 +217,10 @@ class OTTOhubClient:
     async def reply_comment(
         self, bid: str, parent_bcid: str, content: str
     ) -> dict[str, Any]:
+        logger.info(
+            f"[OTTOhub Client] reply_comment: bid={bid}, parent_bcid={parent_bcid}, "
+            f"content_len={len(content)}"
+        )
         return await self.request_get(
             "comment",
             "comment_blog",

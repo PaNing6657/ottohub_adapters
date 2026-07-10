@@ -482,6 +482,22 @@ class OTTOhubCommentPlatformAdapter(Platform):
             target.get("sender_name") or target.get("username") or "未知用户"
         )
 
+        logger.info(
+            f"[OTTOhub Cmt] _handle_sub_comment: bid={bid}, "
+            f"parent_bcid(from_noti)={parent_bcid}, target_bcid={target_bcid}, "
+            f"noti_time={noti_time}, target_keys={list(target.keys())[:10]}"
+        )
+
+        if not target_bcid:
+            logger.warning(
+                f"[OTTOhub Cmt] target_bcid is 0/empty, using parent_bcid={parent_bcid}"
+            )
+            reply_bcid = parent_bcid
+            is_sub = False
+        else:
+            reply_bcid = str(target_bcid)
+            is_sub = True
+
         all_contents = [blog_content, comment_text]
         images = self._collect_images(all_contents)
 
@@ -489,11 +505,17 @@ class OTTOhubCommentPlatformAdapter(Platform):
             msg_id,
             "blog",
             bid,
-            str(target_bcid),
+            reply_bcid,
             comment_author,
             uid,
             comment_text,
-            {"type": "blog", "bid": bid, "parent_bcid": str(target_bcid), "is_sub": True},
+            {
+                "type": "blog",
+                "bid": bid,
+                "parent_bcid": reply_bcid,
+                "main_bcid": parent_bcid,
+                "is_sub": is_sub,
+            },
             images,
         )
 
