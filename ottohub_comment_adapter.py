@@ -485,35 +485,50 @@ class OTTOhubCommentPlatformAdapter(Platform):
         logger.info(
             f"[OTTOhub Cmt] _handle_sub_comment: bid={bid}, "
             f"parent_bcid(from_noti)={parent_bcid}, target_bcid={target_bcid}, "
-            f"noti_time={noti_time}, target_keys={list(target.keys())[:10]}"
+            f"noti_time={noti_time}"
         )
 
-        if not target_bcid:
-            logger.warning(
-                f"[OTTOhub Cmt] target_bcid is 0/empty"
+        parent_candidates = await self._find_blog_comment_paginated(
+            bid,
+            lambda c: str(c.get("bcid", "")) == parent_bcid,
+        )
+        parent_comment_text = ""
+        parent_comment_author = "未知用户"
+        if parent_candidates:
+            parent_comment_text = parent_candidates[0].get("content", "")
+            parent_comment_author = (
+                parent_candidates[0].get("sender_name")
+                or parent_candidates[0].get("username")
+                or "未知用户"
             )
 
-        logger.info(
-            f"[OTTOhub Cmt] Using main comment BCID={parent_bcid} for reply "
-            f"(sub-comment BCID={target_bcid})"
-        )
-        reply_bcid = parent_bcid
-
-        all_contents = [blog_content, comment_text]
+        all_contents = [blog_content, parent_comment_text, comment_text]
         images = self._collect_images(all_contents)
+
+        message_str = (
+            f"【动态原文】\n"
+            f"作者：{blog_author}\n"
+            f"标题：{blog_title}\n"
+            f"内容：{blog_content}\n\n"
+            f"【主评论】\n"
+            f"{parent_comment_author}：{parent_comment_text}\n\n"
+            f"【他人回复】\n"
+            f"{comment_author}：{comment_text}\n\n"
+            f"请针对以上回复输出回复。"
+        )
 
         self._build_and_commit(
             msg_id,
             "blog",
             bid,
-            reply_bcid,
+            parent_bcid,
             comment_author,
             uid,
-            comment_text,
+            message_str,
             {
                 "type": "blog",
                 "bid": bid,
-                "parent_bcid": reply_bcid,
+                "parent_bcid": parent_bcid,
                 "is_sub": True,
             },
             images,
