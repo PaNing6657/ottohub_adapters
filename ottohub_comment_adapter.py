@@ -489,11 +489,11 @@ class OTTOhubCommentPlatformAdapter(Platform):
             msg_id,
             "blog",
             bid,
-            parent_bcid,
+            str(target_bcid),
             comment_author,
             uid,
             comment_text,
-            {"type": "blog", "bid": bid, "parent_bcid": parent_bcid, "is_sub": True},
+            {"type": "blog", "bid": bid, "parent_bcid": str(target_bcid), "is_sub": True},
             images,
         )
 
