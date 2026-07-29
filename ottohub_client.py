@@ -77,41 +77,127 @@ class OTTOhubClient:
                 )
             return result
 
+    async def _rest_get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        await self.ensure_http_session()
+        assert self._http_session is not None
+
+        all_params: dict[str, Any] = {}
+        if self.token:
+            all_params["token"] = self.token
+        if params:
+            all_params.update(params)
+
+        url = f"{self.base_url}{path}"
+        async with self._http_session.get(url, params=all_params) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(
+                    f"request {path} failed: {resp.status} {text[:500]}"
+                )
+            result = json.loads(text)
+            if result.get("status") == "error":
+                raise RuntimeError(
+                    f"request {path} error: {result.get('message')}"
+                )
+            data = result.get("data", {})
+            return {"status": "success", **data}
+
+    async def _rest_post(
+        self,
+        path: str,
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        await self.ensure_http_session()
+        assert self._http_session is not None
+
+        payload: dict[str, Any] = {}
+        if self.token:
+            payload["token"] = self.token
+        if body:
+            payload.update(body)
+
+        url = f"{self.base_url}{path}"
+        async with self._http_session.post(url, json=payload) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(
+                    f"request {path} failed: {resp.status} {text[:500]}"
+                )
+            result = json.loads(text)
+            if result.get("status") == "error":
+                raise RuntimeError(
+                    f"request {path} error: {result.get('message')}"
+                )
+            data = result.get("data", {})
+            return {"status": "success", **data}
+
+    async def _rest_patch(
+        self,
+        path: str,
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        await self.ensure_http_session()
+        assert self._http_session is not None
+
+        payload: dict[str, Any] = {}
+        if self.token:
+            payload["token"] = self.token
+        if body:
+            payload.update(body)
+
+        url = f"{self.base_url}{path}"
+        async with self._http_session.patch(url, json=payload) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(
+                    f"request {path} failed: {resp.status} {text[:500]}"
+                )
+            result = json.loads(text)
+            if result.get("status") == "error":
+                raise RuntimeError(
+                    f"request {path} error: {result.get('message')}"
+                )
+            data = result.get("data", {})
+            return {"status": "success", **data}
+
     async def get_unread_count(self) -> int:
-        result = await self.request_get("im", "new_message_num")
+        result = await self._rest_get("/api/im/unread-count")
         return result.get("new_message_num", 0)
 
     async def get_unread_messages(
         self, offset: int = 0, num: int = 20
     ) -> list[dict[str, Any]]:
-        result = await self.request_get(
-            "im", "unread_message_list", {"offset": offset, "num": num}
+        result = await self._rest_get(
+            "/api/im/unread-list", {"offset": offset, "num": num}
         )
-        return result.get("unread_message_list", [])
+        return result.get("message_list", [])
 
     async def mark_message_read(self, msg_id: str) -> dict[str, Any]:
-        return await self.request_get("im", "read_message", {"msg_id": msg_id})
+        return await self._rest_patch(f"/api/im/messages/{msg_id}/read")
 
     async def send_message(self, receiver: str, message: str) -> dict[str, Any]:
-        return await self.request_get(
-            "im", "send_message", {"receiver": receiver, "message": message}
+        return await self._rest_post(
+            "/api/im/messages", {"receiver": receiver, "message": message}
         )
 
     async def get_friend_list(
         self, offset: int = 0, num: int = 20
     ) -> list[dict[str, Any]]:
-        result = await self.request_get(
-            "im", "friend_list", {"offset": offset, "num": num}
+        result = await self._rest_get(
+            "/api/im/conversations", {"offset": offset, "num": num}
         )
         return result.get("user_list", [])
 
     async def get_friend_messages(
         self, friend_uid: str, offset: int = 0, num: int = 20
     ) -> list[dict[str, Any]]:
-        result = await self.request_get(
-            "im",
-            "friend_message",
-            {"friend_uid": friend_uid, "offset": offset, "num": num},
+        result = await self._rest_get(
+            f"/api/im/conversations/{friend_uid}/messages",
+            {"offset": offset, "num": num},
         )
         return result.get("message_list", [])
 
@@ -191,27 +277,21 @@ class OTTOhubClient:
         num: int = 10,
         cid_asc: int | None = None,
     ) -> dict[str, Any]:
-        req_params = {
-            "bid": bid,
+        params: dict[str, Any] = {
             "parent_bcid": parent_bcid,
             "offset": offset,
             "num": num,
         }
         if cid_asc is not None:
-            req_params["cid_asc"] = cid_asc
-        return await self.request_get(
-            "comment",
-            "blog_comment_list",
-            req_params,
-        )
+            params["cid_asc"] = cid_asc
+        return await self._rest_get(f"/api/comment/blogs/{bid}", params)
 
     async def get_video_comments(
         self, vid: str, parent_vcid: str = "0", offset: int = 0, num: int = 10
     ) -> dict[str, Any]:
-        return await self.request_get(
-            "comment",
-            "video_comment_list",
-            {"vid": vid, "parent_vcid": parent_vcid, "offset": offset, "num": num},
+        return await self._rest_get(
+            f"/api/comment/videos/{vid}",
+            {"parent_vcid": parent_vcid, "offset": offset, "num": num},
         )
 
     async def reply_comment(
@@ -221,17 +301,15 @@ class OTTOhubClient:
             f"[OTTOhub Client] reply_comment: bid={bid}, parent_bcid={parent_bcid}, "
             f"content_len={len(content)}"
         )
-        return await self.request_get(
-            "comment",
-            "comment_blog",
-            {"bid": bid, "parent_bcid": parent_bcid, "content": content},
+        return await self._rest_post(
+            f"/api/comment/blogs/{bid}",
+            {"parent_bcid": parent_bcid, "content": content},
         )
 
     async def reply_video_comment(
         self, vid: str, parent_vcid: str, content: str
     ) -> dict[str, Any]:
-        return await self.request_get(
-            "comment",
-            "comment_video",
-            {"vid": vid, "parent_vcid": parent_vcid, "content": content},
+        return await self._rest_post(
+            f"/api/comment/videos/{vid}",
+            {"parent_vcid": parent_vcid, "content": content},
         )
