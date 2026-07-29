@@ -104,7 +104,14 @@ class OTTOhubClient:
                     f"request {path} error: {result.get('message')}"
                 )
             data = result.get("data", {})
-            return {"status": "success", **data}
+            if isinstance(data, dict):
+                merged = dict(data)
+            else:
+                merged = {}
+            for k, v in result.items():
+                if k not in ("status", "message", "data"):
+                    merged[k] = v
+            return {"status": "success", **merged}
 
     async def _rest_post(
         self,
@@ -133,7 +140,14 @@ class OTTOhubClient:
                     f"request {path} error: {result.get('message')}"
                 )
             data = result.get("data", {})
-            return {"status": "success", **data}
+            if isinstance(data, dict):
+                merged = dict(data)
+            else:
+                merged = {}
+            for k, v in result.items():
+                if k not in ("status", "message", "data"):
+                    merged[k] = v
+            return {"status": "success", **merged}
 
     async def _rest_patch(
         self,
@@ -162,7 +176,14 @@ class OTTOhubClient:
                     f"request {path} error: {result.get('message')}"
                 )
             data = result.get("data", {})
-            return {"status": "success", **data}
+            if isinstance(data, dict):
+                merged = dict(data)
+            else:
+                merged = {}
+            for k, v in result.items():
+                if k not in ("status", "message", "data"):
+                    merged[k] = v
+            return {"status": "success", **merged}
 
     async def get_unread_count(self) -> int:
         result = await self._rest_get("/api/im/unread-count")
@@ -264,10 +285,10 @@ class OTTOhubClient:
         return mapping.get(ext, "application/octet-stream")
 
     async def get_blog_detail(self, bid: str) -> dict[str, Any]:
-        return await self.request_get("blog", "get_blog_detail", {"bid": bid})
+        return await self._rest_get(f"/api/blog/{bid}/detail")
 
     async def get_video_detail(self, vid: str) -> dict[str, Any]:
-        return await self.request_get("video", "get_video_detail", {"vid": vid})
+        return await self._rest_get(f"/api/video/{vid}")
 
     async def get_blog_comments(
         self,
