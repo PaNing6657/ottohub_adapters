@@ -190,68 +190,85 @@ class OTTOhubCommentPlatformAdapter(Platform):
         if not self.client:
             return
 
-        messages = await self.client.get_friend_messages(
-            friend_uid="0", offset=0, num=10
-        )
+        mentions = await self.client.get_mentions(offset=0, num=10, is_read=0)
 
-        for msg in messages:
-            content = msg.get("content", "")
-            msg_id = str(msg.get("msg_id", ""))
-
-            if msg_id in self._processed_ids:
-                continue
-            if "@了你" not in content and "@了" not in content:
+        for mention in mentions:
+            mid = str(mention.get("mid", ""))
+            if not mid or mid in self._processed_ids:
                 continue
 
-            logger.info(f"[OTTOhub Cmt] @message: {content[:120]}")
-            await self._process_notification(msg, content, msg_id)
+            content_type = int(mention.get("content_type") or 0)
+            context_type = int(mention.get("context_type") or 0)
+            content_id = str(mention.get("content_id", ""))
+            source_comment_id = str(mention.get("source_comment_id", ""))
+            sender_uid = str(mention.get("sender_uid", ""))
+            is_sub = context_type == 3
+            excerpt = str(mention.get("excerpt", ""))
+            noti_time = str(mention.get("time", ""))
+            author_hint = str(mention.get("sender_username", ""))
 
-    async def _process_notification(
-        self, raw_msg: dict[str, Any], content: str, msg_id: str
-    ) -> None:
-        is_video = "视频(VID:" in content
-        is_blog = "动态(BID:" in content
-        is_sub = "评论(BCID:" in content or "评论(VCID:" in content
+            logger.info(
+                f"[OTTOhub Cmt] Mention mid={mid}, content_type={content_type}, "
+                f"context_type={context_type}, content_id={content_id}, "
+                f"source_comment_id={source_comment_id}, sender_uid={sender_uid}, "
+                f"is_sub={is_sub}"
+            )
 
-        logger.info(
-            f"[OTTOhub Cmt] Processing msg_id={msg_id}, "
-            f"is_video={is_video}, is_blog={is_blog}, is_sub={is_sub}"
-        )
-
-        if is_video:
-            id_match = re.search(r"VID:(\d+)", content)
-            uid_match = re.search(r"UID:(\d+)", content)
-            if id_match and uid_match:
-                self._processed_ids.add(msg_id)
-                noti_time = raw_msg.get("time", "")
-                await self._handle_video(
-                    msg_id,
-                    id_match[1],
-                    uid_match[1],
-                    is_sub,
-                    content,
+            if (
+                content_type not in (1, 2)
+                or context_type == 1
+                or not content_id
+                or not sender_uid
+            ):
+                logger.info(
+                    f"[OTTOhub Cmt] Skip mention mid={mid}: content_type={content_type}, "
+                    f"context_type={context_type}"
                 )
-            else:
-                self._processed_ids.add(msg_id)
-        elif is_blog:
-            id_match = re.search(r"BID:(\d+)", content)
-            uid_match = re.search(r"UID:(\d+)", content)
-            if id_match and uid_match:
-                self._processed_ids.add(msg_id)
-                noti_time = raw_msg.get("time", "")
-                await self._handle_blog(
-                    msg_id,
-                    id_match[1],
-                    uid_match[1],
-                    is_sub,
-                    content,
-                    noti_time,
+                self._processed_ids.add(mid)
+                self._save_processed_ids()
+                await self._mark_mention_read(mid)
+                continue
+
+            try:
+                if content_type == 1:
+                    await self._handle_video(
+                        mid,
+                        content_id,
+                        sender_uid,
+                        is_sub,
+                        source_comment_id,
+                        excerpt,
+                        author_hint,
+                    )
+                elif content_type == 2:
+                    await self._handle_blog(
+                        mid,
+                        content_id,
+                        sender_uid,
+                        is_sub,
+                        source_comment_id,
+                        excerpt,
+                        noti_time,
+                        author_hint,
+                    )
+            except Exception as e:
+                logger.error(
+                    f"[OTTOhub Cmt] Failed to process mention mid={mid}: {e}",
+                    exc_info=True,
                 )
-            else:
-                self._processed_ids.add(msg_id)
-        else:
-            self._processed_ids.add(msg_id)
-        self._save_processed_ids()
+                continue
+
+            self._processed_ids.add(mid)
+            self._save_processed_ids()
+            await self._mark_mention_read(mid)
+
+    async def _mark_mention_read(self, mid: str) -> None:
+        if not self.client:
+            return
+        try:
+            await self.client.mark_mention_read(mid)
+        except Exception as e:
+            logger.warning(f"[OTTOhub Cmt] Failed to mark mention {mid} read: {e}")
 
     async def _handle_blog(
         self,
@@ -259,8 +276,10 @@ class OTTOhubCommentPlatformAdapter(Platform):
         bid: str,
         uid: str,
         is_sub: bool,
+        source_comment_id: str,
         notification_text: str = "",
         noti_time: str = "",
+        author_hint: str = "",
     ) -> None:
         logger.info(f"[OTTOhub Cmt] Blog: BID={bid}, UID={uid}, is_sub={is_sub}")
 
@@ -280,12 +299,22 @@ class OTTOhubCommentPlatformAdapter(Platform):
                 blog_title,
                 blog_content,
                 blog_author,
+                source_comment_id,
                 notification_text,
-                noti_time,
+                author_hint,
             )
         else:
             await self._handle_main_comment(
-                msg_id, bid, uid, blog_title, blog_content, blog_author, noti_time
+                msg_id,
+                bid,
+                uid,
+                blog_title,
+                blog_content,
+                blog_author,
+                source_comment_id,
+                notification_text,
+                noti_time,
+                author_hint,
             )
 
     async def _find_blog_comment_paginated(
@@ -361,48 +390,6 @@ class OTTOhubCommentPlatformAdapter(Platform):
                             target = c
         return target
 
-    async def _find_sub_comment_by_time(
-        self,
-        bid: str,
-        parent_bcid: str,
-        noti_time: str,
-        page_size: int = 10,
-    ) -> dict | None:
-        noti_dt = self._parse_time(noti_time)
-        if not noti_dt:
-            return None
-
-        offset = 0
-        while True:
-            result = await self.client.get_blog_comments(
-                bid,
-                parent_bcid=parent_bcid,
-                offset=offset,
-                num=page_size,
-                cid_asc=1,
-            )
-            if result.get("status") != "success":
-                return None
-            comment_list = result.get("comment_list", [])
-            if not comment_list:
-                return None
-
-            best_in_page = None
-            best_diff = 11.0
-            for c in comment_list:
-                c_dt = self._parse_time(c.get("time", ""))
-                if c_dt:
-                    diff = abs((c_dt - noti_dt).total_seconds())
-                    if diff <= 10 and diff < best_diff:
-                        best_diff = diff
-                        best_in_page = c
-
-            if best_in_page:
-                return best_in_page
-            if len(comment_list) < page_size:
-                return None
-            offset += page_size
-
     async def _handle_main_comment(
         self,
         msg_id: str,
@@ -411,24 +398,29 @@ class OTTOhubCommentPlatformAdapter(Platform):
         blog_title: str,
         blog_content: str,
         blog_author: str,
+        source_comment_id: str,
+        notification_text: str = "",
         noti_time: str = "",
+        author_hint: str = "",
     ) -> None:
         candidates = await self._find_blog_comment_paginated(
             bid,
-            lambda c: (
-                str(c.get("uid", "")) == uid and "@AICaoMei" in c.get("content", "")
-            ),
+            lambda c: str(c.get("bcid", "")) == source_comment_id,
         )
-        if not candidates:
-            return
+        if candidates:
+            target = self._select_best_candidate(candidates, noti_time)
+            comment_text = target.get("content", "")
+            comment_author = (
+                target.get("sender_name") or target.get("username") or "未知用户"
+            )
+        else:
+            logger.info(
+                f"[OTTOhub Cmt] Blog comment {source_comment_id} not found, use excerpt"
+            )
+            comment_text = notification_text
+            comment_author = author_hint or "未知用户"
 
-        target = self._select_best_candidate(candidates, noti_time)
-
-        comment_text = target.get("content", "")
-        parent_bcid = target.get("bcid", 0)
-        comment_author = (
-            target.get("sender_name") or target.get("username") or "未知用户"
-        )
+        parent_bcid = source_comment_id
 
         images = self._collect_images([blog_content, comment_text])
 
@@ -460,58 +452,28 @@ class OTTOhubCommentPlatformAdapter(Platform):
         blog_title: str,
         blog_content: str,
         blog_author: str,
-        notification_text: str,
-        noti_time: str = "",
+        source_comment_id: str,
+        notification_text: str = "",
+        author_hint: str = "",
     ) -> None:
-        parent_bcid_match = re.search(r"BCID:(\d+)", notification_text)
-        if not parent_bcid_match:
-            return
-        parent_bcid = parent_bcid_match[1]
-
-        target = await self._find_sub_comment_by_time(
-            bid,
-            parent_bcid,
-            noti_time,
-        )
-        if not target:
+        if not source_comment_id:
             return
 
-        target_bcid = target.get("bcid", 0)
-        comment_text = target.get("content", "")
-        comment_author = (
-            target.get("sender_name") or target.get("username") or "未知用户"
-        )
+        comment_text = notification_text
+        comment_author = author_hint or "未知用户"
 
         logger.info(
             f"[OTTOhub Cmt] _handle_sub_comment: bid={bid}, "
-            f"parent_bcid(from_noti)={parent_bcid}, target_bcid={target_bcid}, "
-            f"noti_time={noti_time}"
+            f"sub_comment_id={source_comment_id}"
         )
 
-        parent_candidates = await self._find_blog_comment_paginated(
-            bid,
-            lambda c: str(c.get("bcid", "")) == parent_bcid,
-        )
-        parent_comment_text = ""
-        parent_comment_author = "未知用户"
-        if parent_candidates:
-            parent_comment_text = parent_candidates[0].get("content", "")
-            parent_comment_author = (
-                parent_candidates[0].get("sender_name")
-                or parent_candidates[0].get("username")
-                or "未知用户"
-            )
-
-        all_contents = [blog_content, parent_comment_text, comment_text]
-        images = self._collect_images(all_contents)
+        images = self._collect_images([blog_content, comment_text])
 
         message_str = (
             f"【动态原文】\n"
             f"作者：{blog_author}\n"
             f"标题：{blog_title}\n"
             f"内容：{blog_content}\n\n"
-            f"【主评论】\n"
-            f"{parent_comment_author}：{parent_comment_text}\n\n"
             f"【他人回复】\n"
             f"{comment_author}：{comment_text}\n\n"
             f"请针对以上回复输出回复。"
@@ -521,14 +483,14 @@ class OTTOhubCommentPlatformAdapter(Platform):
             msg_id,
             "blog",
             bid,
-            parent_bcid,
+            source_comment_id,
             comment_author,
             uid,
             message_str,
             {
                 "type": "blog",
                 "bid": bid,
-                "parent_bcid": parent_bcid,
+                "parent_bcid": source_comment_id,
                 "is_sub": True,
             },
             images,
@@ -585,7 +547,9 @@ class OTTOhubCommentPlatformAdapter(Platform):
         vid: str,
         uid: str,
         is_sub: bool,
+        source_comment_id: str,
         notification_text: str = "",
+        author_hint: str = "",
     ) -> None:
         logger.info(f"[OTTOhub Cmt] Video: VID={vid}, UID={uid}, is_sub={is_sub}")
 
@@ -595,23 +559,25 @@ class OTTOhubCommentPlatformAdapter(Platform):
 
         candidates = await self._find_video_comment_paginated(
             vid,
-            lambda c: (
-                str(c.get("uid", "")) == uid and "@AICaoMei" in c.get("content", "")
-            ),
+            lambda c: str(c.get("vcid", "")) == source_comment_id,
         )
-        if not candidates:
-            return
-
-        target = candidates[0]
+        if candidates:
+            target = candidates[0]
+            comment_text = target.get("content", "")
+            comment_author = (
+                target.get("sender_name") or target.get("username") or "未知用户"
+            )
+        else:
+            logger.info(
+                f"[OTTOhub Cmt] Video comment {source_comment_id} not found, use excerpt"
+            )
+            comment_text = notification_text
+            comment_author = author_hint or "未知用户"
 
         video_title = video.get("title", "")
         video_intro = self._truncate(video.get("intro", ""), 1000)
         video_author = video.get("username", "")
-        comment_text = target.get("content", "")
-        parent_vcid = target.get("vcid", 0)
-        comment_author = (
-            target.get("sender_name") or target.get("username") or "未知用户"
-        )
+        parent_vcid = source_comment_id
 
         images = self._collect_images([video_intro, comment_text])
 

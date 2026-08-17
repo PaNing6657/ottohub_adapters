@@ -222,6 +222,31 @@ class OTTOhubClient:
         )
         return result.get("message_list", [])
 
+    async def get_mention_unread_count(self) -> int:
+        result = await self._rest_get("/api/im/mentions/unread-count")
+        return result.get("unread_count", 0)
+
+    async def get_mentions(
+        self,
+        offset: int = 0,
+        num: int = 20,
+        content_type: int | None = None,
+        context_type: int | None = None,
+        is_read: int | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"offset": offset, "num": num}
+        if content_type is not None:
+            params["content_type"] = content_type
+        if context_type is not None:
+            params["context_type"] = context_type
+        if is_read is not None:
+            params["is_read"] = is_read
+        result = await self._rest_get("/api/im/mentions", params)
+        return result.get("list", [])
+
+    async def mark_mention_read(self, mid: str) -> dict[str, Any]:
+        return await self._rest_patch(f"/api/im/mentions/{mid}/read")
+
     async def get_user_profile(self) -> dict[str, Any]:
         return await self.request_get("profile", "user_profile")
 
