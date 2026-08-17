@@ -260,7 +260,7 @@ class OTTOhubClient:
 
         logger.info(f"[OTTOhub] upload_image called with: {file_path}")
 
-        url = f"{self.base_url}/module/creator/submit_image.php"
+        url = f"{self.base_url}/api/image/upload"
         file_path_obj = Path(file_path)
 
         if not file_path_obj.exists():
@@ -271,7 +271,6 @@ class OTTOhubClient:
 
         with open(file_path_obj, "rb") as f:
             data = aiohttp.FormData()
-            data.add_field("action", "submit_image")
             if self.token:
                 data.add_field("token", self.token)
             data.add_field(
@@ -291,7 +290,7 @@ class OTTOhubClient:
                 try:
                     result = json.loads(text)
                     logger.info(f"[OTTOhub] Upload result: {result}")
-                    return result.get("image_url")
+                    return result.get("data", {}).get("image_url")
                 except json.JSONDecodeError as e:
                     logger.error(f"[OTTOhub] JSON decode error: {e}")
                     return None
