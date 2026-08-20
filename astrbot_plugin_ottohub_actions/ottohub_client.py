@@ -288,6 +288,23 @@ class OTTOhubClient:
         """DELETE /api/blog/{bid} 删除动态。"""
         return await self._rest_delete(f"/api/blog/{bid}")
 
+    # ------------------------------------------------------------ 评论模块
+
+    async def reply_blog_comment(
+        self,
+        bid: str,
+        content: str,
+        parent_bcid: str = "0",
+    ) -> dict[str, Any]:
+        """POST /api/comment/blogs/{bid} 发表动态评论/回复评论。
+
+        parent_bcid 为 0 时评论动态本身;大于 0 时回复对应根评论。
+        """
+        return await self._rest_post(
+            f"/api/comment/blogs/{bid}",
+            {"parent_bcid": parent_bcid, "content": content},
+        )
+
     # ------------------------------------------------------------ 关注模块
 
     async def follow_user(self, uid: str) -> dict[str, Any]:

@@ -33,6 +33,8 @@ _ALL_COMMANDS = {
     "发动态", "post", "sendblog",
     "动态详情", "bloginfo", "blog", "blogdetail",
     "搜索动态", "searchblog", "findblog", "搜动态",
+    "评论", "comment", "评论动态",
+    "回复", "reply",
     "关注", "follow",
     "取关", "unfollow",
     "关注状态", "followstatus",
@@ -44,15 +46,18 @@ _ALL_COMMANDS = {
 HELP_TEXT = (
     "🅾️ OTTOhub 社交能力命令:\n"
     "👤 /用户详情 <uid> — 查看用户详情\n"
-    "📢 /发动态 <标题>|<内容> — 发布动态\n"
+    "📢 /发动态 <标题>|<内容> — 发布动态(自动署名)\n"
     "📄 /动态详情 <bid> — 查看动态详情\n"
     "🔍 /搜索动态 <关键词> [数量] — 搜索动态\n"
+    "💬 /评论 <bid> <内容> — 评论动态(自动添加转达前缀)\n"
+    "💬 /回复 <bid> <bcid> <内容> — 回复动态下的评论\n"
     "➕ /关注 <uid> — 关注用户\n"
     "➖ /取关 <uid> — 取消关注\n"
     "📌 /关注状态 <uid> — 查询关注状态\n"
     "✉️ /发消息 <uid> <内容> — 主动发送私信\n"
     "📩 /会话列表 — 最近联系人\n"
-    "🆘 /ottohub帮助 — 本帮助"
+    "🆘 /ottohub帮助 — 本帮助\n"
+    "\n以上能力同样支持自然语言对话(LLM 自动调用工具)。"
 )
 
 
@@ -148,6 +153,33 @@ class Main(Star):
     @staticmethod
     def _first_token(args: str) -> str:
         return args.split()[0] if args.split() else ""
+
+    def _sender_name(self, event: AstrMessageEvent) -> str:
+        """获取触发命令/工具的用户昵称,用于动态署名与评论转达前缀。"""
+        name = ""
+        try:
+            name = event.get_sender_name()
+        except Exception:
+            name = ""
+        if not name:
+            sender = getattr(event.message_obj.sender, "nickname", "") or ""
+            name = str(sender)
+        if not name:
+            name = str(getattr(event.message_obj.sender, "user_id", "未知用户"))
+        return name
+
+    def _relay_content(
+        self, event: AstrMessageEvent, content: str, max_len: int = 459
+    ) -> tuple[str | None, str]:
+        """为评论内容添加转达前缀「XXX让我转达:」;内容超长时截断正文以保留前缀。
+
+        返回 (错误信息, 最终内容);错误信息为 None 表示成功。
+        """
+        prefix = f"{self._sender_name(event)}让我转达:"
+        if len(prefix) >= max_len:
+            return "发送者昵称过长,无法添加转达前缀", ""
+        remain = max_len - len(prefix)
+        return None, prefix + str(content).strip()[:remain]
 
     # ------------------------------------------------------------ 格式化
 
@@ -258,9 +290,15 @@ class Main(Star):
         if not content:
             yield event.plain_result("动态内容不能为空")
             return
-        if len(content) > 10000:
-            yield event.plain_result("动态正文不能超过 10000 字")
+
+        # 结尾自动追加署名,说明是谁让发布的;内容超长时截断正文以保留署名
+        sign = f"\n\n—— 由「{self._sender_name(event)}」让我代发"
+        if len(sign) > 10000:
+            yield event.plain_result("发送者昵称过长,无法添加署名")
             return
+        content = (content + sign)[:10000]
+        if len(content) > 10000:
+            content = content[:10000 - len(sign)] + sign
         if len(title) > 100:
             title = title[:100]
 
@@ -360,6 +398,84 @@ class Main(Star):
             lines.append(line)
         lines.append("发送 /动态详情 <bid> 查看完整内容")
         yield event.plain_result("\n".join(lines))
+
+    # ------------------------------------------------------------ 评论/回复
+
+    @filter.command("评论", alias={"comment", "评论动态"})
+    async def cmd_comment(self, event: AstrMessageEvent):
+        guard = self._guard_write(event)
+        if guard:
+            yield event.plain_result(guard)
+            return
+        parts = self._raw_args(event).split(maxsplit=1)
+        if len(parts) < 2 or not parts[0].isdigit():
+            yield event.plain_result(
+                "用法:/评论 <bid> <内容>\n例:/评论 1001 写得太好了"
+            )
+            return
+        bid, content = parts[0], parts[1].strip()
+        if not content:
+            yield event.plain_result("评论内容不能为空")
+            return
+        err_msg, content = self._relay_content(event, content, max_len=459)
+        if err_msg:
+            yield event.plain_result(err_msg)
+            return
+
+        err = await self._ensure_client()
+        if err:
+            yield event.plain_result(err)
+            return
+        try:
+            result = await self.client.reply_blog_comment(bid, content)  # type: ignore[union-attr]
+        except Exception as e:
+            yield event.plain_result(f"评论失败:{e}")
+            return
+        msg = "✅ 评论发表成功!"
+        if result.get("if_warn") == 1:
+            msg += "\n⚠️ 内容触发审核,通过后将公开展示。"
+        if result.get("if_get_experience") == 1:
+            msg += "\n⭐ 获得经验值奖励。"
+        yield event.plain_result(msg)
+
+    @filter.command("回复", alias={"reply"})
+    async def cmd_reply(self, event: AstrMessageEvent):
+        guard = self._guard_write(event)
+        if guard:
+            yield event.plain_result(guard)
+            return
+        parts = self._raw_args(event).split(maxsplit=2)
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            yield event.plain_result(
+                "用法:/回复 <bid> <bcid> <内容>\n例:/回复 1001 55 同意楼上"
+            )
+            return
+        bid, bcid, content = parts[0], parts[1], parts[2].strip()
+        if not content:
+            yield event.plain_result("回复内容不能为空")
+            return
+        err_msg, content = self._relay_content(event, content, max_len=459)
+        if err_msg:
+            yield event.plain_result(err_msg)
+            return
+
+        err = await self._ensure_client()
+        if err:
+            yield event.plain_result(err)
+            return
+        try:
+            result = await self.client.reply_blog_comment(  # type: ignore[union-attr]
+                bid, content, parent_bcid=bcid
+            )
+        except Exception as e:
+            yield event.plain_result(f"回复失败:{e}")
+            return
+        msg = "✅ 回复发表成功!"
+        if result.get("if_warn") == 1:
+            msg += "\n⚠️ 内容触发审核,通过后将公开展示。"
+        if result.get("if_get_experience") == 1:
+            msg += "\n⭐ 获得经验值奖励。"
+        yield event.plain_result(msg)
 
     # ------------------------------------------------------------ 关注/取关
 
@@ -560,9 +676,14 @@ class Main(Star):
         if not content:
             yield event.plain_result("动态内容不能为空")
             return
-        if len(content) > 10000:
-            yield event.plain_result("动态正文不能超过 10000 字")
+        # 结尾自动追加署名,说明是谁让发布的;内容超长时截断正文以保留署名
+        sign = f"\n\n—— 由「{self._sender_name(event)}」让我代发"
+        if len(sign) > 10000:
+            yield event.plain_result("发送者昵称过长,无法添加署名")
             return
+        content = (content + sign)[:10000]
+        if len(content) > 10000:
+            content = content[:10000 - len(sign)] + sign
         if len(title) > 100:
             title = title[:100]
         err = await self._ensure_client()
@@ -757,6 +878,60 @@ class Main(Star):
             yield event.plain_result(f"发送失败:{e}")
             return
         yield event.plain_result(f"✅ 已发送 {len(chunks)} 条私信给用户 {receiver}")
+
+    @filter.llm_tool(name="ottohub_comment_blog")
+    async def llm_comment_blog(
+        self,
+        event: AstrMessageEvent,
+        bid: str,
+        content: str,
+        parent_bcid: str = "0",
+    ):
+        """在 OTTOhub 的某条动态下发表评论或回复评论,自动在开头添加转达前缀。
+
+        Args:
+            bid(string): 动态ID,纯数字,例如 "1001"
+            content(string): 评论内容,1-459字
+            parent_bcid(string): 父评论ID;评论动态本身填 "0",回复某条评论填该评论的bcid
+        """
+        guard = self._guard_write(event)
+        if guard:
+            yield event.plain_result(guard)
+            return
+        bid = str(bid).strip()
+        content = str(content).strip()
+        parent_bcid = str(parent_bcid or "0").strip()
+        if not bid.isdigit():
+            yield event.plain_result("动态ID格式不正确,应为纯数字。")
+            return
+        if not parent_bcid.isdigit():
+            yield event.plain_result("父评论ID格式不正确,应为纯数字。")
+            return
+        if not content:
+            yield event.plain_result("评论内容不能为空")
+            return
+        err_msg, content = self._relay_content(event, content, max_len=459)
+        if err_msg:
+            yield event.plain_result(err_msg)
+            return
+
+        err = await self._ensure_client()
+        if err:
+            yield event.plain_result(err)
+            return
+        try:
+            result = await self.client.reply_blog_comment(  # type: ignore[union-attr]
+                bid, content, parent_bcid=parent_bcid
+            )
+        except Exception as e:
+            yield event.plain_result(f"评论失败:{e}")
+            return
+        msg = "✅ 评论发表成功!"
+        if result.get("if_warn") == 1:
+            msg += "\n⚠️ 内容触发审核,通过后将公开展示。"
+        if result.get("if_get_experience") == 1:
+            msg += "\n⭐ 获得经验值奖励。"
+        yield event.plain_result(msg)
 
     # ------------------------------------------------------------ 生命周期
 
