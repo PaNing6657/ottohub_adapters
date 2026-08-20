@@ -2,8 +2,6 @@ import asyncio
 import json
 import re
 import sys
-from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -202,16 +200,13 @@ class OTTOhubCommentPlatformAdapter(Platform):
             content_id = str(mention.get("content_id", ""))
             source_comment_id = str(mention.get("source_comment_id", ""))
             sender_uid = str(mention.get("sender_uid", ""))
-            is_sub = context_type == 3
             excerpt = str(mention.get("excerpt", ""))
-            noti_time = str(mention.get("time", ""))
             author_hint = str(mention.get("sender_username", ""))
 
             logger.info(
                 f"[OTTOhub Cmt] Mention mid={mid}, content_type={content_type}, "
                 f"context_type={context_type}, content_id={content_id}, "
-                f"source_comment_id={source_comment_id}, sender_uid={sender_uid}, "
-                f"is_sub={is_sub}"
+                f"source_comment_id={source_comment_id}, sender_uid={sender_uid}"
             )
 
             if (
@@ -235,7 +230,7 @@ class OTTOhubCommentPlatformAdapter(Platform):
                         mid,
                         content_id,
                         sender_uid,
-                        is_sub,
+                        context_type,
                         source_comment_id,
                         excerpt,
                         author_hint,
@@ -245,10 +240,9 @@ class OTTOhubCommentPlatformAdapter(Platform):
                         mid,
                         content_id,
                         sender_uid,
-                        is_sub,
+                        context_type,
                         source_comment_id,
                         excerpt,
-                        noti_time,
                         author_hint,
                     )
             except Exception as e:
@@ -275,13 +269,15 @@ class OTTOhubCommentPlatformAdapter(Platform):
         msg_id: str,
         bid: str,
         uid: str,
-        is_sub: bool,
+        context_type: int,
         source_comment_id: str,
         notification_text: str = "",
-        noti_time: str = "",
         author_hint: str = "",
     ) -> None:
-        logger.info(f"[OTTOhub Cmt] Blog: BID={bid}, UID={uid}, is_sub={is_sub}")
+        logger.info(
+            f"[OTTOhub Cmt] Blog: BID={bid}, UID={uid}, context_type={context_type}, "
+            f"source_comment_id={source_comment_id}"
+        )
 
         blog = await self.client.get_blog_detail(bid)
         if blog.get("status") != "success":
@@ -291,210 +287,161 @@ class OTTOhubCommentPlatformAdapter(Platform):
         blog_content = self._truncate(blog.get("content", ""), 1000)
         blog_author = blog.get("username", "")
 
-        if is_sub:
-            await self._handle_sub_comment(
-                msg_id,
-                bid,
-                uid,
-                blog_title,
-                blog_content,
-                blog_author,
-                source_comment_id,
-                notification_text,
-                author_hint,
-            )
-        else:
-            await self._handle_main_comment(
-                msg_id,
-                bid,
-                uid,
-                blog_title,
-                blog_content,
-                blog_author,
-                source_comment_id,
-                notification_text,
-                noti_time,
-                author_hint,
-            )
-
-    async def _find_blog_comment_paginated(
-        self,
-        bid: str,
-        predicate: Callable[[dict], bool],
-        parent_bcid: str = "0",
-        cid_asc: int | None = None,
-        page_size: int = 10,
-    ) -> list[dict]:
-        offset = 0
-        while True:
-            result = await self.client.get_blog_comments(
-                bid,
-                parent_bcid=parent_bcid,
-                offset=offset,
-                num=page_size,
-                cid_asc=cid_asc,
-            )
-            if result.get("status") != "success":
-                return []
-            comment_list = result.get("comment_list", [])
-            if not comment_list:
-                return []
-            matches = [c for c in comment_list if predicate(c)]
-            if matches:
-                return matches
-            if len(comment_list) < page_size:
-                return []
-            offset += page_size
-
-    async def _find_video_comment_paginated(
-        self,
-        vid: str,
-        predicate: Callable[[dict], bool],
-        parent_vcid: str = "0",
-        page_size: int = 10,
-    ) -> list[dict]:
-        offset = 0
-        while True:
-            result = await self.client.get_video_comments(
-                vid,
-                parent_vcid=parent_vcid,
-                offset=offset,
-                num=page_size,
-            )
-            if result.get("status") != "success":
-                return []
-            comment_list = result.get("comment_list", [])
-            if not comment_list:
-                return []
-            matches = [c for c in comment_list if predicate(c)]
-            if matches:
-                return matches
-            if len(comment_list) < page_size:
-                return []
-            offset += page_size
-
-    def _select_best_candidate(self, candidates: list[dict], noti_time: str) -> dict:
-        target = candidates[0]
-        if noti_time and len(candidates) > 1:
-            noti_dt = self._parse_time(noti_time)
-            if noti_dt:
-                min_diff = abs(
-                    (self._parse_time(target.get("time", "")) or noti_dt) - noti_dt
-                ).total_seconds()
-                for c in candidates[1:]:
-                    c_dt = self._parse_time(c.get("time", ""))
-                    if c_dt:
-                        diff = abs(c_dt - noti_dt).total_seconds()
-                        if diff < min_diff:
-                            min_diff = diff
-                            target = c
-        return target
-
-    async def _handle_main_comment(
-        self,
-        msg_id: str,
-        bid: str,
-        uid: str,
-        blog_title: str,
-        blog_content: str,
-        blog_author: str,
-        source_comment_id: str,
-        notification_text: str = "",
-        noti_time: str = "",
-        author_hint: str = "",
-    ) -> None:
-        candidates = await self._find_blog_comment_paginated(
-            bid,
-            lambda c: str(c.get("bcid", "")) == source_comment_id,
-        )
-        if candidates:
-            target = self._select_best_candidate(candidates, noti_time)
-            comment_text = target.get("content", "")
-            comment_author = (
-                target.get("sender_name") or target.get("username") or "未知用户"
-            )
-        else:
-            logger.info(
-                f"[OTTOhub Cmt] Blog comment {source_comment_id} not found, use excerpt"
-            )
-            comment_text = notification_text
-            comment_author = author_hint or "未知用户"
-
-        parent_bcid = source_comment_id
-
-        images = self._collect_images([blog_content, comment_text])
-
-        self._build_and_commit(
-            msg_id,
-            "blog",
-            bid,
-            str(parent_bcid),
-            comment_author,
-            uid,
-            (
-                f"【动态原文】\n"
-                f"作者：{blog_author}\n"
-                f"标题：{blog_title}\n"
-                f"内容：{blog_content}\n\n"
-                f"【他人评论】\n"
-                f"{comment_author}：{comment_text}\n\n"
-                f"请针对以上评论输出回复。"
-            ),
-            {"type": "blog", "bid": bid, "parent_bcid": parent_bcid},
-            images,
+        # 定位要回复的评论：取其上方的上下文评论（最多10条），并确定实际回复目标
+        context_comments, reply_parent = await self._locate_blog_comment_context(
+            bid, source_comment_id, context_type
         )
 
-    async def _handle_sub_comment(
-        self,
-        msg_id: str,
-        bid: str,
-        uid: str,
-        blog_title: str,
-        blog_content: str,
-        blog_author: str,
-        source_comment_id: str,
-        notification_text: str = "",
-        author_hint: str = "",
-    ) -> None:
-        if not source_comment_id:
-            return
-
-        comment_text = notification_text
+        is_sub = context_type == 3
+        comment_text = notification_text or "（无内容）"
         comment_author = author_hint or "未知用户"
+        context_str = self._format_context(context_comments)
 
-        logger.info(
-            f"[OTTOhub Cmt] _handle_sub_comment: bid={bid}, "
-            f"sub_comment_id={source_comment_id}"
+        images = self._collect_images(
+            [blog_content, comment_text]
+            + [c.get("content", "") for c in context_comments]
         )
 
-        images = self._collect_images([blog_content, comment_text])
+        target_label = "【他人回复】" if is_sub else "【他人评论】"
 
         message_str = (
             f"【动态原文】\n"
             f"作者：{blog_author}\n"
             f"标题：{blog_title}\n"
             f"内容：{blog_content}\n\n"
-            f"【他人回复】\n"
+            f"【上方评论】\n"
+            f"{context_str}\n\n"
+            f"{target_label}\n"
             f"{comment_author}：{comment_text}\n\n"
-            f"请针对以上回复输出回复。"
+            f"请针对以上评论输出回复。"
         )
 
         self._build_and_commit(
             msg_id,
             "blog",
             bid,
-            source_comment_id,
+            reply_parent,
             comment_author,
             uid,
             message_str,
             {
                 "type": "blog",
                 "bid": bid,
-                "parent_bcid": source_comment_id,
-                "is_sub": True,
+                "parent_bcid": reply_parent,
+                "is_sub": is_sub,
             },
             images,
         )
+
+    async def _locate_blog_comment_context(
+        self,
+        bid: str,
+        target_bcid: str,
+        context_type: int,
+        max_context: int = 10,
+    ) -> tuple[list[dict], str]:
+        """定位要回复的评论。
+
+        返回 (上方上下文评论列表, 实际回复目标 parent_bcid)：
+        - context_type==2（根评论）：上方=目标之前的根评论；回复目标=本条（target_bcid）
+        - context_type==3（子评论）：上方=父根评论+目标之前的同父子评论；回复目标=父根评论 ID
+        """
+        page_size = 12
+        if not target_bcid:
+            return [], "0"
+
+        if context_type == 2:
+            seen: list[dict] = []
+            offset = 0
+            while True:
+                result = await self.client.get_blog_comments(
+                    bid,
+                    parent_bcid="0",
+                    offset=offset,
+                    num=page_size,
+                    cid_asc=1,
+                )
+                if result.get("status") != "success":
+                    break
+                comment_list = result.get("comment_list", [])
+                if not comment_list:
+                    break
+                for c in comment_list:
+                    if str(c.get("bcid", "")) == str(target_bcid):
+                        return seen[-max_context:], str(target_bcid)
+                    seen.append(c)
+                if len(comment_list) < page_size:
+                    break
+                offset += page_size
+            return seen[-max_context:], str(target_bcid)
+
+        # context_type == 3: 子评论，需先找到其父根评论
+        root_offset = 0
+        while True:
+            roots = await self.client.get_blog_comments(
+                bid,
+                parent_bcid="0",
+                offset=root_offset,
+                num=page_size,
+                cid_asc=1,
+            )
+            if roots.get("status") != "success":
+                break
+            root_list = roots.get("comment_list", [])
+            if not root_list:
+                break
+            for root in root_list:
+                root_id = str(root.get("bcid", ""))
+                # 父根评论视为上方第 1 条，其后为该根下的其他子评论
+                sub_seen: list[dict] = [root]
+                sub_offset = 0
+                while True:
+                    subs = await self.client.get_blog_comments(
+                        bid,
+                        parent_bcid=root_id,
+                        offset=sub_offset,
+                        num=page_size,
+                        cid_asc=1,
+                    )
+                    if subs.get("status") != "success":
+                        break
+                    sub_list = subs.get("comment_list", [])
+                    if not sub_list:
+                        break
+                    for sub in sub_list:
+                        if str(sub.get("bcid", "")) == str(target_bcid):
+                            return sub_seen[-max_context:], root_id
+                        sub_seen.append(sub)
+                    if len(sub_list) < page_size:
+                        break
+                    sub_offset += page_size
+            if len(root_list) < page_size:
+                break
+            root_offset += page_size
+
+        # 未找到目标评论：回退为回复动态本体（parent=0），内容仍带 @ 作者
+        logger.warning(
+            f"[OTTOhub Cmt] Blog comment {target_bcid} not found in tree, "
+            f"fallback reply to blog root"
+        )
+        return [], "0"
+
+    @staticmethod
+    def _format_context(comments: list[dict]) -> str:
+        if not comments:
+            return "（无）"
+        lines = []
+        for c in comments[-10:]:
+            author = (
+                c.get("username")
+                or c.get("sender_name")
+                or "未知用户"
+            )
+            content = str(c.get("content", "")).strip()
+            if not content:
+                continue
+            lines.append(f"{author}：{content}")
+        return "\n".join(lines) if lines else "（无）"
 
     def _build_and_commit(
         self,
@@ -546,78 +493,162 @@ class OTTOhubCommentPlatformAdapter(Platform):
         msg_id: str,
         vid: str,
         uid: str,
-        is_sub: bool,
+        context_type: int,
         source_comment_id: str,
         notification_text: str = "",
         author_hint: str = "",
     ) -> None:
-        logger.info(f"[OTTOhub Cmt] Video: VID={vid}, UID={uid}, is_sub={is_sub}")
+        logger.info(
+            f"[OTTOhub Cmt] Video: VID={vid}, UID={uid}, context_type={context_type}, "
+            f"source_comment_id={source_comment_id}"
+        )
 
         video = await self.client.get_video_detail(vid)
         if video.get("status") != "success":
             return
 
-        candidates = await self._find_video_comment_paginated(
-            vid,
-            lambda c: str(c.get("vcid", "")) == source_comment_id,
-        )
-        if candidates:
-            target = candidates[0]
-            comment_text = target.get("content", "")
-            comment_author = (
-                target.get("sender_name") or target.get("username") or "未知用户"
-            )
-        else:
-            logger.info(
-                f"[OTTOhub Cmt] Video comment {source_comment_id} not found, use excerpt"
-            )
-            comment_text = notification_text
-            comment_author = author_hint or "未知用户"
-
         video_title = video.get("title", "")
         video_intro = self._truncate(video.get("intro", ""), 1000)
         video_author = video.get("username", "")
-        parent_vcid = source_comment_id
 
-        images = self._collect_images([video_intro, comment_text])
+        # 定位要回复的评论：取其上方的上下文评论（最多10条），并确定实际回复目标
+        context_comments, reply_parent = await self._locate_video_comment_context(
+            vid, source_comment_id, context_type
+        )
+
+        is_sub = context_type == 3
+        comment_text = notification_text or "（无内容）"
+        comment_author = author_hint or "未知用户"
+        context_str = self._format_context(context_comments)
+
+        images = self._collect_images(
+            [video_intro, comment_text]
+            + [c.get("content", "") for c in context_comments]
+        )
+
+        target_label = "【他人回复】" if is_sub else "【他人评论】"
+
+        message_str = (
+            f"【视频信息】\n"
+            f"作者：{video_author}\n"
+            f"标题：{video_title}\n"
+            f"简介：{video_intro}\n\n"
+            f"【上方评论】\n"
+            f"{context_str}\n\n"
+            f"{target_label}\n"
+            f"{comment_author}：{comment_text}\n\n"
+            f"请针对以上评论输出回复。"
+        )
 
         self._build_and_commit(
             msg_id,
             "video",
             vid,
-            str(parent_vcid),
+            reply_parent,
             comment_author,
             uid,
-            (
-                f"【视频信息】\n"
-                f"作者：{video_author}\n"
-                f"标题：{video_title}\n"
-                f"简介：{video_intro}\n\n"
-                f"【他人评论】\n"
-                f"{comment_author}：{comment_text}\n\n"
-                f"请针对以上评论输出回复。"
-            ),
-            {"type": "video", "vid": vid, "parent_vcid": parent_vcid},
+            message_str,
+            {
+                "type": "video",
+                "vid": vid,
+                "parent_vcid": reply_parent,
+                "is_sub": is_sub,
+            },
             images,
         )
+
+    async def _locate_video_comment_context(
+        self,
+        vid: str,
+        target_vcid: str,
+        context_type: int,
+        max_context: int = 10,
+    ) -> tuple[list[dict], str]:
+        """定位要回复的视频评论，语义与 _locate_blog_comment_context 一致。"""
+        page_size = 12
+        if not target_vcid:
+            return [], "0"
+
+        if context_type == 2:
+            seen: list[dict] = []
+            offset = 0
+            while True:
+                result = await self.client.get_video_comments(
+                    vid,
+                    parent_vcid="0",
+                    offset=offset,
+                    num=page_size,
+                    cid_asc=1,
+                )
+                if result.get("status") != "success":
+                    break
+                comment_list = result.get("comment_list", [])
+                if not comment_list:
+                    break
+                for c in comment_list:
+                    if str(c.get("vcid", "")) == str(target_vcid):
+                        return seen[-max_context:], str(target_vcid)
+                    seen.append(c)
+                if len(comment_list) < page_size:
+                    break
+                offset += page_size
+            return seen[-max_context:], str(target_vcid)
+
+        # context_type == 3: 子评论，需先找到其父根评论
+        root_offset = 0
+        while True:
+            roots = await self.client.get_video_comments(
+                vid,
+                parent_vcid="0",
+                offset=root_offset,
+                num=page_size,
+                cid_asc=1,
+            )
+            if roots.get("status") != "success":
+                break
+            root_list = roots.get("comment_list", [])
+            if not root_list:
+                break
+            for root in root_list:
+                root_id = str(root.get("vcid", ""))
+                sub_seen: list[dict] = [root]
+                sub_offset = 0
+                while True:
+                    subs = await self.client.get_video_comments(
+                        vid,
+                        parent_vcid=root_id,
+                        offset=sub_offset,
+                        num=page_size,
+                        cid_asc=1,
+                    )
+                    if subs.get("status") != "success":
+                        break
+                    sub_list = subs.get("comment_list", [])
+                    if not sub_list:
+                        break
+                    for sub in sub_list:
+                        if str(sub.get("vcid", "")) == str(target_vcid):
+                            return sub_seen[-max_context:], root_id
+                        sub_seen.append(sub)
+                    if len(sub_list) < page_size:
+                        break
+                    sub_offset += page_size
+            if len(root_list) < page_size:
+                break
+            root_offset += page_size
+
+        # 未找到目标评论：回退为回复视频本体（parent=0），内容仍带 @ 作者
+        logger.warning(
+            f"[OTTOhub Cmt] Video comment {target_vcid} not found in tree, "
+            f"fallback reply to video root"
+        )
+        return [], "0"
 
     @staticmethod
     def _truncate(text: str, max_len: int) -> str:
         if len(text) > max_len:
             return text[:max_len] + "..."
         return text
-
-    @staticmethod
-    def _parse_time(time_str: str) -> datetime | None:
-        if not time_str:
-            return None
-        try:
-            return datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            try:
-                return datetime.fromtimestamp(int(time_str))
-            except (ValueError, TypeError):
-                return None
 
     @staticmethod
     def _extract_image_urls(text: str) -> list[str]:

@@ -332,12 +332,21 @@ class OTTOhubClient:
         return await self._rest_get(f"/api/comment/blogs/{bid}", params)
 
     async def get_video_comments(
-        self, vid: str, parent_vcid: str = "0", offset: int = 0, num: int = 10
+        self,
+        vid: str,
+        parent_vcid: str = "0",
+        offset: int = 0,
+        num: int = 10,
+        cid_asc: int | None = None,
     ) -> dict[str, Any]:
-        return await self._rest_get(
-            f"/api/comment/videos/{vid}",
-            {"parent_vcid": parent_vcid, "offset": offset, "num": num},
-        )
+        params: dict[str, Any] = {
+            "parent_vcid": parent_vcid,
+            "offset": offset,
+            "num": num,
+        }
+        if cid_asc is not None:
+            params["cid_asc"] = cid_asc
+        return await self._rest_get(f"/api/comment/videos/{vid}", params)
 
     async def reply_comment(
         self, bid: str, parent_bcid: str, content: str
