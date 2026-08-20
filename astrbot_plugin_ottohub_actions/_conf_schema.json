@@ -1,0 +1,46 @@
+{
+  "connection": {
+    "description": "连接设置",
+    "type": "object",
+    "hint": "OTTOhub API 地址与账号认证。直接填写 Token 可跳过账号密码登录;否则填写账号密码由插件自动登录。",
+    "items": {
+      "API地址": {
+        "description": "API 地址",
+        "hint": "OTTOhub API 基础地址,默认官方地址。",
+        "type": "string",
+        "default": "https://api.ottohub.cn"
+      },
+      "token": {
+        "description": "Token",
+        "hint": "登录 Token;留空则使用下方用户ID+密码自动登录。",
+        "type": "string",
+        "default": ""
+      },
+      "用户ID": {
+        "description": "用户ID",
+        "hint": "OTTOhub 账号(邮箱/用户名)。",
+        "type": "string",
+        "default": ""
+      },
+      "密码": {
+        "description": "密码",
+        "hint": "OTTOhub 登录密码。",
+        "type": "string",
+        "default": ""
+      }
+    }
+  },
+  "permission": {
+    "description": "权限设置",
+    "type": "object",
+    "hint": "限制可执行写操作(发动态/关注/取关/发消息)的用户。留空表示所有用户均可使用。",
+    "items": {
+      "管理员用户ID": {
+        "description": "管理员用户ID",
+        "hint": "允许执行写操作的用户ID列表,如 [\"123\", \"456\"]。",
+        "type": "list",
+        "default": []
+      }
+    }
+  }
+}
