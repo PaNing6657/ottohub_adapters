@@ -1,6 +1,6 @@
 name: astrbot_plugin_ottohub_actions
 display_name: OTTOhub 社交能力
-desc: 让机器人拥有 OTTOhub 社交能力:查看用户详情、发布动态、按 bid 查看动态详情、搜索动态、关注/取关用户、主动发送私信。
+desc: 让机器人拥有 OTTOhub 社交能力:查看用户详情、发布动态、按 bid 查看动态详情、搜索动态、关注/取关用户、主动发送私信、匿问我答(匿名提问自动转达回答)。
 author: STCaoMei
 version: 1.0.0
-repo: https://github.com/PaNing6657/ottohub_adapters
+repo: https://github.com/PaNing6657/astrbot_plugin_ottohub_actions

@@ -284,9 +284,38 @@ class OTTOhubClient:
             params[sort] = 1
         return await self._rest_get("/api/blog/search", params)
 
+    async def get_user_blogs(
+        self,
+        uid: str,
+        offset: int = 0,
+        num: int = 10,
+    ) -> dict[str, Any]:
+        """GET /api/blog/users/{uid}/blogs 指定用户的动态列表(按最新排序)。"""
+        return await self._rest_get(
+            f"/api/blog/users/{uid}/blogs",
+            {"offset": offset, "num": num},
+        )
+
     async def delete_blog(self, bid: str) -> dict[str, Any]:
         """DELETE /api/blog/{bid} 删除动态。"""
         return await self._rest_delete(f"/api/blog/{bid}")
+
+    # ------------------------------------------------------------ 评论模块
+
+    async def reply_blog_comment(
+        self,
+        bid: str,
+        content: str,
+        parent_bcid: str = "0",
+    ) -> dict[str, Any]:
+        """POST /api/comment/blogs/{bid} 发表动态评论/回复评论。
+
+        parent_bcid 为 0 时评论动态本身;大于 0 时回复对应根评论。
+        """
+        return await self._rest_post(
+            f"/api/comment/blogs/{bid}",
+            {"parent_bcid": parent_bcid, "content": content},
+        )
 
     # ------------------------------------------------------------ 关注模块
 

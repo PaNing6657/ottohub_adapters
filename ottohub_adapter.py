@@ -165,8 +165,19 @@ class OTTOhubPlatformAdapter(Platform):
             return
 
         sender = str(msg.get("sender", ""))
+        # 忽略系统消息(UID 0)
         if sender == "0":
             self._processed_msg_ids.add(msg_id)
+            return
+
+        # 屏蔽机器人自身账号的消息
+        if self.bot_self_id and sender == str(self.bot_self_id):
+            self._processed_msg_ids.add(msg_id)
+            if msg_id:
+                try:
+                    await self.client.mark_message_read(msg_id)
+                except Exception as e:
+                    logger.warning(f"[OTTOhub] Failed to mark self-message read: {e}")
             return
 
         self._processed_msg_ids.add(msg_id)
@@ -176,7 +187,7 @@ class OTTOhubPlatformAdapter(Platform):
 
         if msg_id:
             try:
-                await self.client.mark_message_read(msg_id)
+                await self.client.mark_message_read(msg_id) 
             except Exception as e:
                 logger.warning(f"[OTTOhub] Failed to mark message read: {e}")
 
