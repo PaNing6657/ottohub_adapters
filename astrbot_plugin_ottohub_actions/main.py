@@ -768,7 +768,7 @@ class Main(Star):
             return
         yield event.plain_result(
             f"✅ 已匿名向用户 {target_uid} 提问(问题编号 {qa_id})。\n"
-            "对方回复 /a <编号> <回答> 后,回答会自动转达给你,不会暴露你的身份。"
+            "对方回复 /a <编号> <回答> 后,回答会自动转达给你"
         )
 
     async def _set_receive(self, event: AstrMessageEvent, on: bool) -> str:
@@ -870,7 +870,7 @@ class Main(Star):
             yield event.plain_result(f"转达失败:{e}")
             return
         yield event.plain_result(
-            f"✅ 回答已匿名转达给提问者(问题编号 {qa_id})。"
+            f"✅ 回答已转达给提问者(问题编号 {qa_id})。"
         )
 
     @filter.command("匿问状态", alias={"匿问查询", "qastatus", "anonstatus"})
