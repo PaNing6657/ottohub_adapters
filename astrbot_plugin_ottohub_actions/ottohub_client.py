@@ -284,6 +284,18 @@ class OTTOhubClient:
             params[sort] = 1
         return await self._rest_get("/api/blog/search", params)
 
+    async def get_user_blogs(
+        self,
+        uid: str,
+        offset: int = 0,
+        num: int = 10,
+    ) -> dict[str, Any]:
+        """GET /api/blog/users/{uid}/blogs 指定用户的动态列表(按最新排序)。"""
+        return await self._rest_get(
+            f"/api/blog/users/{uid}/blogs",
+            {"offset": offset, "num": num},
+        )
+
     async def delete_blog(self, bid: str) -> dict[str, Any]:
         """DELETE /api/blog/{bid} 删除动态。"""
         return await self._rest_delete(f"/api/blog/{bid}")
