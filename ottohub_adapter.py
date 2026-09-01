@@ -24,6 +24,22 @@ else:
     from typing_extensions import override
 
 
+def _cfg_number(value: Any, default: float, minimum: float = 0.1) -> float:
+    """把配置项安全转换为数字。
+
+    配置面板/配置文件可能把数值保存为字符串(如 "3"),
+    直接传给 asyncio.sleep 等会抛 TypeError。
+    转换失败(空值/非法值)时回退默认值,并保证不低于 minimum。
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    if num != num:  # NaN
+        return default
+    return max(minimum, num)
+
+
 @register_platform_adapter(
     "OTTOhub私信",
     "OTTOhub私信",
@@ -120,7 +136,7 @@ class OTTOhubPlatformAdapter(Platform):
 
         self.client = OTTOhubClient(
             base_url=api_base_url,
-            upload_timeout=self.config.get("上传超时", 60),
+            upload_timeout=_cfg_number(self.config.get("上传超时", 60), 60),
         )
 
         try:
@@ -136,7 +152,7 @@ class OTTOhubPlatformAdapter(Platform):
         await self._shutdown_event.wait()
 
     async def _polling_loop(self) -> None:
-        poll_interval = self.config.get("轮询间隔", 3)
+        poll_interval = _cfg_number(self.config.get("轮询间隔", 3), 3)
 
         while not self._shutdown_event.is_set():
             try:
