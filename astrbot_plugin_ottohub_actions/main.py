@@ -196,6 +196,20 @@ class Main(Star):
             name = str(getattr(event.message_obj.sender, "user_id", "未知用户"))
         return name
 
+    _COMMENT_INTENT_KEYWORDS = (
+        "评论", "留言", "comment", "回复一下动态", "去动态下说", "帮我在动态",
+    )
+
+    def _explicit_comment_intent(self, event: AstrMessageEvent) -> bool:
+        """判断用户消息是否明确表达了「发表评论」的意图。
+
+        用于阻止 LLM 把「在动态评论区被 @」误判为「去该动态发评论」。
+        """
+        if not self._cfg("评论需显式指令", True):
+            return True
+        text = str(event.message_str or "").lower()
+        return any(kw.lower() in text for kw in self._COMMENT_INTENT_KEYWORDS)
+
     def _relay_content(
         self, event: AstrMessageEvent, content: str, max_len: int = 459
     ) -> tuple[str | None, str]:
@@ -1220,12 +1234,24 @@ class Main(Star):
         content: str,
         parent_bcid: str = "0",
     ) -> str:
-        """在 OTTOhub 的某条动态下发表评论或回复评论,自动在开头添加转达前缀。
+        """在 OTTOhub 的某条动态下新增一条评论,自动在开头添加转达前缀。
+
+        ⚠️ 仅在用户明确要求「去某条动态下发评论/留言/评论动态」时才调用。
+
+        禁止调用的情况(重要):
+        - 用户是在某条动态的评论区 @你、向你提问或搭话时,那只是普通对话。
+          此时直接正常生成回复文字即可,禁止调用本工具,否则会在该动态下
+          额外产生一条新评论(用户看到的是「机器人没有回复我,反而自己
+          发了条评论」)。
+        - 用户没有给出动态ID(bid),或没有给出明确要发布的评论文字时。
 
         Args:
-            bid(string): 动态ID,纯数字,例如 "1001"
-            content(string): 评论内容,1-459字
-            parent_bcid(string): 父评论ID;评论动态本身填 "0",回复某条评论填该评论的bcid
+            bid(string): 动态ID,纯数字,例如 "1001";必须来自用户明确指定或
+                此前查询结果,不可猜测。
+            content(string): 要发布的评论正文,1-459字。
+            parent_bcid(string): 父评论ID。默认 "0" 表示评论动态本身;
+                仅当用户显式给出某条评论的 bcid 并要求回复该评论时才填写,
+                不要自行推测 bcid。
         """
         guard = self._guard_write(event)
         if guard:
@@ -1235,6 +1261,14 @@ class Main(Star):
         parent_bcid = str(parent_bcid or "0").strip()
         if not bid.isdigit():
             return "动态ID格式不正确,应为纯数字。"
+        # 仅当用户消息中显式出现评论意图时才允许落库,避免模型把
+        # 「在动态评论区被 @」误判为「去该动态发评论」。
+        if not self._explicit_comment_intent(event):
+            return (
+                "未检测到用户明确要求发表评论,已阻止本次调用以避免产生多余评论。"
+                "如果用户只是在动态评论区 @你或与你对话,请直接用文字回复即可,"
+                "不要再调用本工具。"
+            )
         if not parent_bcid.isdigit():
             return "父评论ID格式不正确,应为纯数字。"
         if not content:
