@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import sys
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, cast
@@ -31,6 +32,8 @@ else:
 
 # 同一会话(评论线程)只需首次携带完整正文,避免每轮重复传输
 _MAX_TRACKED_SESSIONS = 512
+# 记录超过该时长后失效(防止会话被清理后仍一直省略正文)
+_BODY_SENT_TTL_SECONDS = 7 * 24 * 3600
 
 
 def _cfg_number(value: Any, default: float, minimum: float = 0.1) -> float:
@@ -84,7 +87,11 @@ class OTTOhubCommentPlatformAdapter(Platform):
         self._load_processed_ids()
         self._session_meta: dict[str, dict[str, Any]] = {}
         # 已向 LLM 提供过完整正文的会话,同会话后续消息只带增量内容
-        self._body_sent_sessions: OrderedDict[str, None] = OrderedDict()
+        # 落盘保存:插件重载/重启后不重复发送,多实例之间也能共享
+        self._body_sent_file = self._data_dir / "body_sent_sessions.json"
+        self._body_sent_sessions: OrderedDict[str, float] = OrderedDict()
+        self._body_sent_mtime: float = 0.0
+        self._load_body_sent_sessions()
 
     def _load_processed_ids(self) -> None:
         if self._processed_file.exists():
@@ -98,6 +105,66 @@ class OTTOhubCommentPlatformAdapter(Platform):
             self._processed_file.write_text(json.dumps(list(self._processed_ids)))
         except Exception as e:
             logger.warning(f"[OTTOhub Cmt] Save ids failed: {e}")
+
+    def _load_body_sent_sessions(self) -> None:
+        """从磁盘加载"已发送完整正文"的会话记录(重启/多实例共享)。"""
+        try:
+            if not self._body_sent_file.exists():
+                return
+            data = json.loads(self._body_sent_file.read_text(encoding="utf-8"))
+            now = time.time()
+            items = data.items() if isinstance(data, dict) else []
+            sessions: OrderedDict[str, float] = OrderedDict()
+            for key, ts in items:
+                try:
+                    ts = float(ts)
+                except (TypeError, ValueError):
+                    ts = now
+                if now - ts <= _BODY_SENT_TTL_SECONDS:
+                    sessions[str(key)] = ts
+            self._body_sent_sessions = sessions
+            self._body_sent_mtime = self._body_sent_file.stat().st_mtime
+        except Exception as e:
+            logger.warning(f"[OTTOhub Cmt] Load body-sent sessions failed: {e}")
+
+    def _sync_body_sent_sessions(self) -> None:
+        """其它实例更新过记录时重新加载,避免重复发送完整正文。"""
+        try:
+            if not self._body_sent_file.exists():
+                return
+            if self._body_sent_file.stat().st_mtime > self._body_sent_mtime:
+                self._load_body_sent_sessions()
+        except Exception as e:
+            logger.warning(f"[OTTOhub Cmt] Sync body-sent sessions failed: {e}")
+
+    def _save_body_sent_sessions(self) -> None:
+        """写回记录,并合并磁盘上其它实例的条目,避免互相覆盖。"""
+        try:
+            merged: OrderedDict[str, float] = OrderedDict()
+            try:
+                if self._body_sent_file.exists():
+                    on_disk = json.loads(
+                        self._body_sent_file.read_text(encoding="utf-8")
+                    )
+                    if isinstance(on_disk, dict):
+                        for key, ts in on_disk.items():
+                            try:
+                                merged[str(key)] = float(ts)
+                            except (TypeError, ValueError):
+                                continue
+            except Exception:
+                pass
+            for key, ts in self._body_sent_sessions.items():
+                merged[key] = ts
+            while len(merged) > _MAX_TRACKED_SESSIONS:
+                merged.popitem(last=False)
+            self._body_sent_file.write_text(
+                json.dumps(merged, ensure_ascii=False), encoding="utf-8"
+            )
+            self._body_sent_sessions = merged
+            self._body_sent_mtime = self._body_sent_file.stat().st_mtime
+        except Exception as e:
+            logger.warning(f"[OTTOhub Cmt] Save body-sent sessions failed: {e}")
 
     @override
     def meta(self) -> PlatformMetadata:
@@ -180,7 +247,13 @@ class OTTOhubCommentPlatformAdapter(Platform):
             logger.error("[OTTOhub Cmt] 用户ID或密码未配置")
             return
 
-        logger.info("[OTTOhub Cmt] Starting comment reply adapter...")
+        logger.info(
+            f"[OTTOhub Cmt] Adapter module loaded from: {Path(__file__).resolve()}"
+        )
+        logger.info(
+            f"[OTTOhub Cmt] Starting comment reply adapter..."
+            f" (body-sent sessions: {len(self._body_sent_sessions)})"
+        )
         self.client = OTTOhubClient(
             base_url=api_base_url,
             upload_timeout=_cfg_number(self.config.get("上传超时", 60), 60),
@@ -489,14 +562,19 @@ class OTTOhubCommentPlatformAdapter(Platform):
         """判断是否为该会话(评论线程)的首次回复。
 
         首次需携带完整正文;同一会话后续消息因 LLM 上下文已包含正文,
-        只需发送增量内容。仅保留最近若干会话的记录,防止无限增长。
+        只需发送增量内容。记录落盘,插件重载/重启后依然生效;
+        仅保留最近若干会话,防止无限增长。
         """
+        self._sync_body_sent_sessions()
+        now = time.time()
         if session_id in self._body_sent_sessions:
+            self._body_sent_sessions[session_id] = now
             self._body_sent_sessions.move_to_end(session_id)
             return False
-        self._body_sent_sessions[session_id] = None
+        self._body_sent_sessions[session_id] = now
         while len(self._body_sent_sessions) > _MAX_TRACKED_SESSIONS:
             self._body_sent_sessions.popitem(last=False)
+        self._save_body_sent_sessions()
         return True
 
     def _build_and_commit(
