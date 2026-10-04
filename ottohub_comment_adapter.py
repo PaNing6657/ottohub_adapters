@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import sys
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, cast
 
@@ -26,6 +27,10 @@ if sys.version_info >= (3, 12):
     from typing import override
 else:
     from typing_extensions import override
+
+
+# 同一会话(评论线程)只需首次携带完整正文,避免每轮重复传输
+_MAX_TRACKED_SESSIONS = 512
 
 
 def _cfg_number(value: Any, default: float, minimum: float = 0.1) -> float:
@@ -78,6 +83,8 @@ class OTTOhubCommentPlatformAdapter(Platform):
         self._processed_file = self._data_dir / "processed_ids.json"
         self._load_processed_ids()
         self._session_meta: dict[str, dict[str, Any]] = {}
+        # 已向 LLM 提供过完整正文的会话,同会话后续消息只带增量内容
+        self._body_sent_sessions: OrderedDict[str, None] = OrderedDict()
 
     def _load_processed_ids(self) -> None:
         if self._processed_file.exists():
@@ -300,13 +307,28 @@ class OTTOhubCommentPlatformAdapter(Platform):
             return
 
         blog_title = blog.get("title", "")
-        blog_content = self._truncate(blog.get("content", ""), 1000)
+        blog_content = blog.get("content", "")
         blog_author = blog.get("username", "")
 
         # 定位要回复的评论：取其上方的上下文评论（最多10条），并确定实际回复目标
         context_comments, reply_parent = await self._locate_blog_comment_context(
             bid, source_comment_id, context_type
         )
+
+        # 同一评论线程只需首次携带完整正文,后续消息复用 LLM 上下文
+        session_id = self._session_id("blog", bid, reply_parent)
+        if self._take_first_turn(session_id):
+            blog_content_text = blog_content
+            logger.info(
+                f"[OTTOhub Cmt] Session {session_id}: include full blog content "
+                f"({len(blog_content)} chars)"
+            )
+        else:
+            blog_content_text = "（动态正文已在上文提供，此处省略）"
+            logger.info(
+                f"[OTTOhub Cmt] Session {session_id}: omit blog content, "
+                f"reuse conversation context"
+            )
 
         is_sub = context_type == 3
         comment_text = notification_text or "（无内容）"
@@ -324,7 +346,7 @@ class OTTOhubCommentPlatformAdapter(Platform):
             f"【动态原文】\n"
             f"作者：{blog_author}\n"
             f"标题：{blog_title}\n"
-            f"内容：{blog_content}\n\n"
+            f"内容：{blog_content_text}\n\n"
             f"【上方评论】\n"
             f"{context_str}\n\n"
             f"{target_label}\n"
@@ -459,6 +481,24 @@ class OTTOhubCommentPlatformAdapter(Platform):
             lines.append(f"{author}：{content}")
         return "\n".join(lines) if lines else "（无）"
 
+    @staticmethod
+    def _session_id(cmt_type: str, object_id: str, parent_cid: str) -> str:
+        return f"ottohub_cmt:{cmt_type}:{object_id}:{parent_cid}"
+
+    def _take_first_turn(self, session_id: str) -> bool:
+        """判断是否为该会话(评论线程)的首次回复。
+
+        首次需携带完整正文;同一会话后续消息因 LLM 上下文已包含正文,
+        只需发送增量内容。仅保留最近若干会话的记录,防止无限增长。
+        """
+        if session_id in self._body_sent_sessions:
+            self._body_sent_sessions.move_to_end(session_id)
+            return False
+        self._body_sent_sessions[session_id] = None
+        while len(self._body_sent_sessions) > _MAX_TRACKED_SESSIONS:
+            self._body_sent_sessions.popitem(last=False)
+        return True
+
     def _build_and_commit(
         self,
         msg_id: str,
@@ -471,7 +511,7 @@ class OTTOhubCommentPlatformAdapter(Platform):
         raw_info: dict[str, Any],
         image_urls: list[str] | None = None,
     ) -> None:
-        session_id = f"ottohub_cmt:{cmt_type}:{object_id}:{parent_cid}"
+        session_id = self._session_id(cmt_type, object_id, parent_cid)
 
         raw_info["comment_author"] = comment_author
 
@@ -524,13 +564,28 @@ class OTTOhubCommentPlatformAdapter(Platform):
             return
 
         video_title = video.get("title", "")
-        video_intro = self._truncate(video.get("intro", ""), 1000)
+        video_intro = video.get("intro", "")
         video_author = video.get("username", "")
 
         # 定位要回复的评论：取其上方的上下文评论（最多10条），并确定实际回复目标
         context_comments, reply_parent = await self._locate_video_comment_context(
             vid, source_comment_id, context_type
         )
+
+        # 同一评论线程只需首次携带完整简介,后续消息复用 LLM 上下文
+        session_id = self._session_id("video", vid, reply_parent)
+        if self._take_first_turn(session_id):
+            video_intro_text = video_intro
+            logger.info(
+                f"[OTTOhub Cmt] Session {session_id}: include full video intro "
+                f"({len(video_intro)} chars)"
+            )
+        else:
+            video_intro_text = "（视频简介已在上文提供，此处省略）"
+            logger.info(
+                f"[OTTOhub Cmt] Session {session_id}: omit video intro, "
+                f"reuse conversation context"
+            )
 
         is_sub = context_type == 3
         comment_text = notification_text or "（无内容）"
@@ -548,7 +603,7 @@ class OTTOhubCommentPlatformAdapter(Platform):
             f"【视频信息】\n"
             f"作者：{video_author}\n"
             f"标题：{video_title}\n"
-            f"简介：{video_intro}\n\n"
+            f"简介：{video_intro_text}\n\n"
             f"【上方评论】\n"
             f"{context_str}\n\n"
             f"{target_label}\n"
@@ -659,12 +714,6 @@ class OTTOhubCommentPlatformAdapter(Platform):
             f"fallback reply to video root"
         )
         return [], "0"
-
-    @staticmethod
-    def _truncate(text: str, max_len: int) -> str:
-        if len(text) > max_len:
-            return text[:max_len] + "..."
-        return text
 
     @staticmethod
     def _extract_image_urls(text: str) -> list[str]:

@@ -310,7 +310,8 @@ class OTTOhubClient:
     ) -> dict[str, Any]:
         """POST /api/comment/blogs/{bid} 发表动态评论/回复评论。
 
-        parent_bcid 为 0 时评论动态本身;大于 0 时回复对应根评论。
+        parent_bcid 为 "0" 时评论动态本身(新增一级评论);
+        大于 0 时该评论作为 parent_bcid 对应评论的子评论(回复)。
         """
         return await self._rest_post(
             f"/api/comment/blogs/{bid}",
